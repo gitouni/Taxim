@@ -7,6 +7,7 @@ from scipy.ndimage import gaussian_filter
 # from scipy.ndimage import correlate
 import scipy.ndimage as ndimage
 from scipy import interpolate
+from scipy.stats.qmc import Halton
 import cv2
 import argparse
 import open3d as o3d
@@ -16,12 +17,17 @@ sys.path.append("../")
 from Basics.CalibData import CalibData
 import Basics.params as pr
 import Basics.sensorParams as psp
-
+from tqdm import tqdm
 parser = argparse.ArgumentParser()
 parser.add_argument("--obj", nargs='?', default='semi-sphere',
                     help="Name of Object to be tested, supported_objects_list = [square, cylinder6]")
-parser.add_argument('--depth', default = 1.0, type=float, help='Indetation depth into the gelpad.')
+parser.add_argument('--max_depth', default = 2.0, type=float, help='Indetation depth into the gelpad.')
+parser.add_argument('--min_depth',default=0.4, type=float)
+parser.add_argument("--max_margin_ratio",type=float,default=0.9)
+parser.add_argument("--iter",type=int,default=100)
+parser.add_argument("--seed",type=int,default=0)
 parser.add_argument("--suffix",type=str,default=".pcd")
+
 args = parser.parse_args()
 
 class simulator(object):
@@ -72,7 +78,7 @@ class simulator(object):
         kscale = pr.kscale
 
         img_d = self.f0.astype('float')
-        convEachDim = lambda in_img :  gaussian_filter(in_img, kscale)
+        convEachDim = lambda in_img : gaussian_filter(in_img, kscale)
 
         f0 = self.f0.copy()
         for ch in range(img_d.shape[2]):
@@ -340,21 +346,26 @@ if __name__ == "__main__":
     data_folder = osp.join(osp.join( "..", "calibs"))
     filePath = osp.join('..', 'data', 'objects')
     gelpad_model_path = osp.join( '..', 'calibs', 'gelmap5.npy')
+    os.makedirs(osp.join("..","results","sim"), exist_ok=True)
+    os.makedirs(osp.join("..","results","shadow"), exist_ok=True)
+    os.makedirs(osp.join("..","results","height"), exist_ok=True)
     obj = args.obj + args.suffix
     sim = simulator(data_folder, filePath, obj)
-    press_depth = args.depth
-    dx = 0
-    dy = 0
-
-    # generate height map
-    height_map, gel_map, contact_mask = sim.generateHeightMap(gelpad_model_path, press_depth, dx, dy)
-    # approximate the soft deformation
-    heightMap, contact_mask, contact_height = sim.deformApprox(press_depth, height_map, gel_map, contact_mask)
-    # simulate tactile images
-    sim_img, shadow_sim_img = sim.simulating(heightMap, contact_mask, contact_height, shadow=True)
-    img_savePath = osp.join('..', 'results', obj[:-4]+'_sim.jpg')
-    shadow_savePath = osp.join('..', 'results', obj[:-4]+'_shadow.jpg')
-    height_savePath = osp.join('..', 'results', obj[:-4]+'_height.npy')
-    cv2.imwrite(img_savePath, sim_img)
-    cv2.imwrite(shadow_savePath, shadow_sim_img)
-    np.save(height_savePath, heightMap)
+    sampler = Halton(3,seed=args.seed)
+    rand_data = sampler.random(args.iter)
+    depth_list = (args.max_depth - args.min_depth) * rand_data[:,0] + args.min_depth
+    dx_list = psp.w * (rand_data[:,1] - 0.5) * args.max_margin_ratio * 0.5
+    dy_list = psp.h * (rand_data[:,2] - 0.5) * args.max_margin_ratio * 0.5
+    for i, (depth, dx, dy) in tqdm(enumerate(zip(depth_list, dx_list, dy_list)), total=len(dx_list)):
+        # generate height map
+        height_map, gel_map, contact_mask = sim.generateHeightMap(gelpad_model_path, depth, dx, dy)
+        # approximate the soft deformation
+        heightMap, contact_mask, contact_height = sim.deformApprox(depth, height_map, gel_map, contact_mask)
+        # simulate tactile images
+        sim_img, shadow_sim_img = sim.simulating(heightMap, contact_mask, contact_height, shadow=True)
+        img_savePath = osp.join('..', 'results', 'sim', '%04d.jpg'%(i+1))
+        shadow_savePath = osp.join('..', 'results', 'shadow', '%04d.jpg'%(i+1))
+        height_savePath = osp.join('..', 'results', 'height', '%04d.jpg'%(i+1))
+        cv2.imwrite(img_savePath, sim_img)
+        cv2.imwrite(shadow_savePath, shadow_sim_img)
+        np.save(height_savePath, heightMap)
