@@ -3,6 +3,7 @@ import numpy as np
 import os
 from os import path as osp
 import argparse
+os.chdir(os.path.dirname(__file__))
 import sys
 sys.path.append("..")
 import Basics.sensorParams as psp
@@ -61,21 +62,22 @@ def getDomeHeightMap(filePath, obj, press_depth, domeMap):
 
 if __name__ == "__main__":
     # calibration file
-    data_folder = osp.join("..", "calibs", "femCalib.npz")
-    super = SuperPosition(data_folder)
+    data_folder = osp.join("../..", "calibs", "femCalib.npz")
+    super = SuperPosition(os.path.abspath(data_folder))
 
     # compose
-    filePath = osp.join('..', 'data', 'objects')
+    filePath = osp.join('../..', 'data', 'objects')
     obj = args.obj+'.ply'
     local_deform = np.array([args.dx, args.dy, args.dz])
     press_depth = local_deform[2]
 
-    domeMap = np.load(osp.join('..', 'calibs', 'dome_gel.npy'))
+    domeMap = np.load(osp.join('../..', 'calibs', 'dome_gel.npy'))
     gel_map, contact_mask = getDomeHeightMap(filePath, obj, press_depth, domeMap)
+    print(gel_map.shape, contact_mask.shape)
     resultMap = super.compose_sparse(local_deform, gel_map, contact_mask)
 
     #### for visualization/saving the results ###
-    compose_savePath = osp.join('..', 'results', args.obj+'_compose.jpg')
+    compose_savePath = osp.join('../..', 'results', args.obj+'_compose.jpg')
 
     plt.figure(1)
     plt.subplot(311)
@@ -92,5 +94,6 @@ if __name__ == "__main__":
     fig = plt.imshow(fill_blank(resultMap[2,:,:]), cmap='RdBu')
     fig.axes.get_xaxis().set_visible(False)
     fig.axes.get_yaxis().set_visible(False)
-    # plt.show()
-    plt.savefig(compose_savePath)
+    plt.show()
+    # plt.savefig(compose_savePath)
+    # print("composed img saved to {}".format(compose_savePath))
