@@ -29,7 +29,8 @@ def options():
     obj_parser.add_argument("--obj", nargs='?', default='semi-sphere',
                         help="Name of Object to be tested, supported_objects_list = [square, cylinder6]")
     obj_parser.add_argument("--radius", default=2.832, type=float, help="unit: mm")
-    obj_parser.add_argument("--data_folder",type=str,default=osp.join("..", 'calibs'))
+    obj_parser.add_argument("--data_folder",type=str,default="../calibs/")
+    obj_parser.add_argument("--fem_folder",type=str,default="../calibs/")
     obj_parser.add_argument('--max_depth', default=2.832, type=float, help='Indetation depth into the gelpad.')
     obj_parser.add_argument('--min_depth',default= 1.0, type=float)
     obj_parser.add_argument("--max_margin_ratio",type=float,default=0.6)
@@ -43,10 +44,16 @@ def options():
     marker_parser.add_argument("--marker_cols",type=int, default=6, help="number of intervals")
     marker_parser.add_argument("--marker_pix_distance", type=int, default=80)
     marker_parser.add_argument("--marker_radius",type=int, default=8)
+    marker_parser.add_argument("--filter_kernel",type=int, default=5)
+    marker_parser.add_argument("--local_deform_xrange",type=float,nargs=2,default=[-2,2])
+    marker_parser.add_argument("--local_deform_yrange",type=float,nargs=2,default=[-2,2])
     io_parser = parser.add_argument_group()
+    io_parser.add_argument("--gelpad_model_path",type=str,default="../calibs/gelmap5.npy")
     io_parser.add_argument("--result_basedir",type=str,default="../results")
-    io_parser.add_argument("--sim_dir",type=str,default="asim_marker")
-    io_parser.add_argument("--height_dir",type=str,default="aheight_marker")
+    io_parser.add_argument("--marker_sim_dir",type=str,default="asim_marker")
+    io_parser.add_argument("--non_marker_sim_dir",type=str,default="asim_non_marker")
+    io_parser.add_argument("--marker_dir",type=str,default="asim_marker_mask")
+    io_parser.add_argument("--height_dir",type=str,default="aheight")
     return parser.parse_args()
 
 class simulator(object):
@@ -371,55 +378,70 @@ class simulator(object):
 if __name__ == "__main__":
     args = options()
     assert(args.radius >= args.max_depth)
-    data_folder = osp.join(osp.join( "..", "calibs"))
-    gelpad_model_path = osp.join( '..', 'calibs', 'gelmap5.npy')
-    os.makedirs(osp.join(args.result_basedir, args.sim_dir), exist_ok=True)
-    # os.makedirs(osp.join("..","results","ashadow"), exist_ok=True)
+    os.makedirs(osp.join(args.result_basedir, args.marker_sim_dir), exist_ok=True)
+    os.makedirs(osp.join(args.result_basedir, args.marker_dir), exist_ok=True)
+    os.makedirs(osp.join(args.result_basedir, args.non_marker_sim_dir), exist_ok=True)
     os.makedirs(osp.join(args.result_basedir, args.height_dir), exist_ok=True)
     sim = simulator(args)
     sampler = Halton(3,seed=args.seed)
-    rand_data = sampler.random(args.sample_num)
-    depth_list = (args.max_depth - args.min_depth) * rand_data[:,0] + args.min_depth
-    du_list = np.array(psp.w * (rand_data[:,1] - 0.5) * args.max_margin_ratio, dtype=np.int32)
-    dv_list = np.array(psp.h * (rand_data[:,2] - 0.5) * args.max_margin_ratio, dtype=np.int32)
-    height_map, gel_map, contact_mask = sim.generateHeightMap(gelpad_model_path, 0, 0, 0)
+    pose_rand_data = sampler.random(args.sample_num)
+    sampler2 = Halton(2, seed=args.seed + 1)
+    displacement_rand_data = sampler2.random(args.sample_num)
+    depth_list = (args.max_depth - args.min_depth) * pose_rand_data[:,0] + args.min_depth
+    du_list = np.array(psp.w * (pose_rand_data[:,1] - 0.5) * args.max_margin_ratio, dtype=np.int32)
+    dv_list = np.array(psp.h * (pose_rand_data[:,2] - 0.5) * args.max_margin_ratio, dtype=np.int32)
+    local_dfx = displacement_rand_data[:,0] * (args.local_deform_xrange[1] - args.local_deform_xrange[0]) + args.local_deform_xrange[0]
+    local_dfy = displacement_rand_data[:,1] * (args.local_deform_yrange[1] - args.local_deform_yrange[0]) + args.local_deform_yrange[0]
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(5, 5))
+    
+    # ref img
+    height_map, gel_map, contact_mask = sim.generateHeightMap(args.gelpad_model_path, 0, 0, 0)
     # approximate the soft deformation
     heightMap, contact_mask, contact_height = sim.deformApprox(0, height_map, gel_map, contact_mask)
     # simulate tactile images
     sim_img, _, dzdx, dzdy = sim.simulating(heightMap, contact_mask, contact_height, shadow=True)
+    cv2.imwrite(osp.join(args.result_basedir, args.non_marker_sim_dir, '%04d.jpg'%(0)), sim_img)
     ref_marker_img = np.zeros((psp.h, psp.w), dtype=np.uint8)  # uint8
     for marker_pos in sim.marker_pos_arr:
         cv2.circle(ref_marker_img, marker_pos, radius=sim.marker_radius, color=255, thickness=-1)  # solid
     ref_binary_marker = ref_marker_img > 0
     marker_coords = np.nonzero(ref_marker_img)  # (y_arr, x_arr)
     sim_img[ref_binary_marker,:] = np.array([0,0,0],dtype=np.int32)  # add deformed markers
-    img_savePath = osp.join(args.result_basedir, args.sim_dir, '%04d.jpg'%(0))
+    binary_marker_img = np.zeros((psp.h, psp.w),dtype=np.uint8)
+    binary_marker_img[ref_binary_marker] = 255
+    cv2.imwrite(osp.join(args.result_basedir, args.marker_dir, "%04d.jpg"%(0)),binary_marker_img)
     # shadow_savePath = osp.join('..', 'results', 'ashadow', '%04d.jpg'%(0))
     height_savePath = osp.join(args.result_basedir, args.height_dir, '%04d.npz'%(0))
-    cv2.imwrite(img_savePath, sim_img)
+    cv2.imwrite(osp.join(args.result_basedir, args.marker_sim_dir, '%04d.jpg'%(0)), sim_img)
     np.savez(height_savePath, height=height_map*psp.pixmm, dzdx=dzdx, dzdy=dzdy, contact_mask=contact_mask)
-    for i, (depth, du, dv) in tqdm(enumerate(zip(depth_list, du_list, dv_list)), total=len(du_list)):
+    for i, (depth, du, dv, dispdx, dispdy) in tqdm(enumerate(zip(depth_list, du_list, dv_list, local_dfx, local_dfy)), total=len(du_list)):
         # generate height map
-        height_map, gel_map, contact_mask = sim.generateHeightMap(gelpad_model_path, depth, du, dv)
+        height_map, gel_map, contact_mask = sim.generateHeightMap(args.gelpad_model_path, depth, du, dv)
         # approximate the soft deformation
         heightMap, contact_mask, contact_height = sim.deformApprox(depth, height_map, gel_map, contact_mask)
         # simulate tactile images
         sim_img, shadow_sim_img, dzdx, dzdy = sim.simulating(heightMap, contact_mask, contact_height, shadow=True)
-        local_deform = (0,0,depth)
+        binary_marker_img = np.zeros((psp.h, psp.w),dtype=np.uint8)
+        cv2.imwrite(osp.join(args.result_basedir, args.non_marker_sim_dir, '%04d.jpg'%(i+1)), sim_img)
+        local_deform = (dispdx,dispdy,depth)
         resultMap = sim.fem_super.compose_sparse_insert(local_deform, gel_map, contact_mask)
         xbias = fill_blank(resultMap[0,...])
         ybias = fill_blank(resultMap[1,...])
         marker_xarr = np.array(marker_coords[1] + xbias[ref_binary_marker],dtype=np.int32)  # floor integar approx
         marker_yarr = np.array(marker_coords[0] + ybias[ref_binary_marker],dtype=np.int32)  # floor integar approx
         rev = (0 <= marker_xarr) * (marker_xarr < psp.w) * (0 <= marker_yarr) * (marker_yarr < psp.h)
-        sim_img[marker_yarr[rev], marker_xarr[rev],:] = np.array([0,0,0],dtype=np.int32)  # add deformed markers
-        marker_xarr = np.array(marker_coords[1] + xbias[ref_binary_marker] + 0.5,dtype=np.int32)  # ceil integar approx
-        marker_yarr = np.array(marker_coords[0] + ybias[ref_binary_marker] + 0.5,dtype=np.int32)  # ceil integar approx
-        rev = (0 <= marker_xarr) * (marker_xarr < psp.w) * (0 <= marker_yarr) * (marker_yarr < psp.h)
-        sim_img[marker_yarr[rev], marker_xarr[rev],:] = np.array([0,0,0],dtype=np.int32)  # add deformed markers
-        img_savePath = osp.join(args.result_basedir, args.sim_dir, '%04d.jpg'%(i+1))
+        binary_marker_img[marker_yarr[rev], marker_xarr[rev]] = 255
+        binary_marker_img = cv2.morphologyEx(binary_marker_img,cv2.MORPH_CLOSE,kernel)
+        sim_img[binary_marker_img>0,:] = np.array([0,0,0],dtype=np.int32)  # add deformed markers
+        
+        # marker_xarr = np.array(marker_coords[1] + xbias[ref_binary_marker] + 0.5,dtype=np.int32)  # ceil integar approx
+        # marker_yarr = np.array(marker_coords[0] + ybias[ref_binary_marker] + 0.5,dtype=np.int32)  # ceil integar approx
+        # rev = (0 <= marker_xarr) * (marker_xarr < psp.w) * (0 <= marker_yarr) * (marker_yarr < psp.h)
+        # sim_img[marker_yarr[rev], marker_xarr[rev],:] = np.array([0,0,0],dtype=np.int32)  # add deformed markers
+        # binary_marker_img[marker_yarr[rev], marker_xarr[rev]] = 255
+        cv2.imwrite(osp.join(args.result_basedir, args.marker_dir, "%04d.jpg"%(i+1)),binary_marker_img)
         # shadow_savePath = osp.join('..', 'results', 'ashadow', '%04d.jpg'%(i+1))
         height_savePath = osp.join(args.result_basedir, args.height_dir, '%04d.npz'%(i+1))
-        cv2.imwrite(img_savePath, sim_img)
+        cv2.imwrite(osp.join(args.result_basedir, args.marker_sim_dir, '%04d.jpg'%(i+1)), sim_img)
         # cv2.imwrite(shadow_savePath, shadow_sim_img)
         np.savez(height_savePath, height=height_map*psp.pixmm, dzdx=dzdx, dzdy=dzdy, contact_mask=contact_mask)
