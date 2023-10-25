@@ -1,17 +1,12 @@
-import matplotlib.pyplot as plt
 import numpy as np
-import os
-from os import path as osp
-import cv2
 from scipy.optimize import nnls
 # from scipy.ndimage import correlate
 # import scipy.ndimage as ndimage
 from scipy import interpolate
-os.chdir(osp.dirname(__file__))
 import sys
 sys.path.append("..")
 sys.path.append("../..")
-from compose.dataLoader import dataLoader
+from MarkerMotionSimulation.compose.dataLoader import dataLoader
 import Basics.sensorParams as psp
 import Basics.params as pr
 
@@ -56,6 +51,14 @@ def fill_blank(img):
 
     GD1 = interpolate.griddata((x1, y1), newarr.ravel(),
                               (xx, yy),
+                                 method='linear', fill_value = 0) # cubic # nearest # linear
+    return GD1
+
+def fill_marker_blank(img, marker_x, marker_y):
+    y1, x1 = np.nonzero(img)
+    newarr = img[y1, x1]
+    GD1 = interpolate.griddata((x1, y1), newarr.ravel(),
+                              (marker_x, marker_y),
                                  method='linear', fill_value = 0) # cubic # nearest # linear
     return GD1
 
