@@ -351,8 +351,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mesh_folder", default="3d-model/vial.stl")
     parser.add_argument("--calib_dir", default="calibs")
-    parser.add_argument("--pose_dir",type=str,default="data/output_cycles/pose")
-    parser.add_argument("--output_dir",type=str,default="data/output_cycles/")
+    parser.add_argument("--pose_dir",type=str,default="data/fixedbg/pose")
+    parser.add_argument("--output_dir",type=str,default="data/fixedbg/")
     parser.add_argument('--depth', default = 1.0, type=float, help='Indetation depth into the gelpad.')
     args = parser.parse_args()
 
@@ -360,19 +360,6 @@ if __name__ == "__main__":
     gelpad_model_path = osp.join(args.calib_dir, 'gelmap5.npy')
     sim = simulator(args.calib_dir, args.mesh_folder)
     press_depth = args.depth
-    index = 0
-    min_x = -0.006
-    max_x = 0.006
-    min_z = -0.025
-    max_z = 0.025
-
-    step_x = 0.002
-    step_theta = np.pi/6
-
-    num_i = np.int32((max_x-min_x)/step_x+1)
-    num_j = np.int32((max_z-min_z)/step_x+1)
-    num_k = np.int32((2*np.pi)/step_theta)
-    min_theta = 0
     pose_files = sorted(os.listdir(args.pose_dir))
     t_mask_dir = os.path.join(args.output_dir,'t_mask')
     t_img_dir = os.path.join(args.output_dir,'t_img')
