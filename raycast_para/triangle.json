@@ -1,0 +1,26 @@
+{
+    "transfer":
+    {
+        "translation":{
+            "scale": [1,1,0],
+            "bias": [0,0,0]
+        },
+        "rotation":{
+            "scale": [1,0,0],
+            "bias": [0,0,0],
+            "mode": "zyx"
+        },
+        "scale": 0.005
+    },
+    "depth": 1.0,
+    "ray_casting":
+    {
+        "fov_deg": 60,
+        "center": [0, 0, 0],
+        "eye": [0, 0, 1.5],
+        "up": [1, 0, 0],
+        "width_px": 640,
+        "height_px": 480
+    }
+
+}
