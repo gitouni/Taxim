@@ -26,7 +26,7 @@ def rot_transfer(dx, dy, dtheata):
     return translation, rot_zyx
 
 class simulator(object):
-    def __init__(self, data_folder:str, mesh_path:str, mesh_scale:float):
+    def __init__(self, data_folder:str, mesh_path:str, mesh_scale:float, zero_mean:bool=True):
         """
         Initialize the simulator.
         1) load the object,
@@ -37,6 +37,9 @@ class simulator(object):
         # object facing positive direction of z axis
 
         self.mesh = o3d.io.read_triangle_mesh(mesh_path)
+        if zero_mean:
+            center = self.mesh.get_center()
+            self.mesh.translate(-center)
         self.mesh.scale(mesh_scale,[0,0,0])
         # polytable
         calib_data = osp.join(data_folder, "polycalib.npz")
@@ -244,6 +247,10 @@ class simulator(object):
         )
         ans = scene.cast_rays(rays)
         heightMap = ans['t_hit'].numpy()
+        # from matplotlib import pyplot as plt
+        # plt.imshow(heightMap)
+        # plt.savefig("debug_heightmap.png")
+        # sys.exit(0)
         inf_mask = heightMap == inf
         heightMap[inf_mask] = 0
         heightMap_pixel = 1000*heightMap/psp.pixmm
@@ -347,18 +354,18 @@ class simulator(object):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mesh_folder", default="3d-model/vial.stl")
+    parser.add_argument("--mesh_folder", default="data/objects/mug.stl")
     parser.add_argument("--calib_dir", default="calibs")
-    parser.add_argument("--pose_dir",type=str,default="data/randpose/pose")
-    parser.add_argument("--output_dir",type=str,default="data/vial/")
-    parser.add_argument('--raycast_file', type=str, default="raycast_para/vial.json")
+    parser.add_argument("--pose_dir",type=str,default="dataset/mug/pose")
+    parser.add_argument("--output_dir",type=str,default="dataset/mug")
+    parser.add_argument('--raycast_file', type=str, default="raycast_para/mug.json")
     args = parser.parse_args()
     raycast_data = json.load(open(args.raycast_file,'r'))
     press_depth = raycast_data['depth']
     transfer_data = raycast_data['transfer']
     # gelpad_model_path = osp.join( '..', 'calibs', 'dome_gel.npy')
     gelpad_model_path = osp.join(args.calib_dir, 'gelmap5.npy')
-    sim = simulator(args.calib_dir, args.mesh_folder, transfer_data['scale'])
+    sim = simulator(args.calib_dir, args.mesh_folder, transfer_data['scale'], transfer_data['zero_mean'])
 
     raw_tsl = np.zeros(3)
     raw_rot_euler = np.zeros(3)
@@ -379,6 +386,8 @@ if __name__ == "__main__":
         tsl *= np.array(transfer_data['translation']['scale'])
         tsl += np.array(transfer_data['translation']['bias'])
         rot_euler = np.copy(raw_rot_euler)
+
+        # dtheta = 1
         rot_euler[rot_plsholder] = dtheta
         rot_euler *= np.array(transfer_data['rotation']['scale'])
         rot_euler += np.array(transfer_data['rotation']['bias'])
