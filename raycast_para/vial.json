@@ -10,7 +10,8 @@
             "bias": [0,3.141592653589793,0],
             "mode": "xyz"
         },
-        "scale": 1.0
+        "scale": 1.0,
+        "zero_mean": false
     },
     "depth": 1.0,
     "ray_casting":

@@ -6,11 +6,11 @@
             "bias": [0,0,0]
         },
         "rotation":{
-            "scale": [1,0,0],
-            "bias": [0,0,0],
+            "scale": [0,1,0],
+            "bias": [1.5707963267948966,0,0],
             "mode": "zyx"
         },
-        "scale": 0.005,
+        "scale": 0.5,
         "zero_mean": false
     },
     "depth": 1.0,
@@ -18,7 +18,7 @@
     {
         "fov_deg": 60,
         "center": [0, 0, 0],
-        "eye": [0, 0, 1.5],
+        "eye": [0, 0.08, 0.0],
         "up": [1, 0, 0],
         "width_px": 640,
         "height_px": 480

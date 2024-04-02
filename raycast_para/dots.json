@@ -10,7 +10,8 @@
             "bias": [0,0,0],
             "mode": "zyx"
         },
-        "scale": 0.005
+        "scale": 0.005,
+        "zero_mean": false
     },
     "depth": 3.0,
     "ray_casting":
