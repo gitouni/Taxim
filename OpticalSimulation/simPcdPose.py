@@ -19,11 +19,21 @@ from tqdm import tqdm
 from copy import deepcopy
 import json
 from matplotlib import pyplot as plt
+from scipy.interpolate import griddata
+
 
 def rot_transfer(dx, dy, dtheata):
     translation = [dx, dy, 0]
     rot_zyx = [dtheata,0,0]
     return translation, rot_zyx
+
+def pinhole_to_perspective(fov, width, height):
+    f = width / (2 * np.tan(np.radians(fov) / 2))
+    fx = f
+    fy = f
+    cx = width / 2
+    cy = height / 2
+    return fx, fy, cx, cy, width, height
 
 class simulator(object):
     def __init__(self, data_folder:str, mesh_path:str, mesh_scale:float, zero_mean:bool=True, origin=[0,0,0]):
@@ -237,7 +247,7 @@ class simulator(object):
         tf_mesh.rotate(rot,
                     center=[0,0,0])
         tf_mesh.translate(tsl)
-        
+        fx, fy, cx, cy, _, _ = pinhole_to_perspective(raycast_argv['fov_deg'], raycast_argv['width_px'], raycast_argv['height_px'])
         
         mesh = o3d.t.geometry.TriangleMesh.from_legacy(tf_mesh)
         scene = o3d.t.geometry.RaycastingScene()
@@ -248,45 +258,54 @@ class simulator(object):
             **raycast_argv
         )
         ans = scene.cast_rays(rays)
-        heightMap = ans['t_hit'].numpy()
-        raw_heightmap = heightMap.copy()
-        inf_mask = np.isinf(heightMap)
-        heightMap[inf_mask] = 0
-        heightMap_pixel = 1000*heightMap/psp.pixmm
-        # heightMap_pixel = 1000*heightMap/psp.pixmm
-        min_o = np.min(heightMap_pixel[np.nonzero(heightMap_pixel)])
-
-        heightMap_pixel = -heightMap_pixel+0.015/psp.pixmm+min_o
-        heightMap_pixel[inf_mask] = 0
-        min_o = np.min(heightMap_pixel[np.nonzero(heightMap_pixel)])
-        heightMap_pixel[inf_mask] = min_o
-        max_o = np.max(heightMap_pixel)
-        # heightMap_pixel = -(heightMap_pixel - max_o)
-        # heightMap_pixel[inf_mask] = 0
-
-        # mask_map = mask_u & mask_v & mask_z
-        # heightMap[vv[mask_map],uu[mask_map]] = self.vertices[mask_map][:,2]/psp.pixmm
+        t_hit_map = ans['t_hit'].numpy()
+        valid_mask = np.isfinite(t_hit_map)
+        v, u = np.nonzero(valid_mask)
+        z = t_hit_map[valid_mask] * 1000  # m -> mm
+        
+        x = (u - cx) * z / fx
+        x = -x  # mirror
+        y = (v - cy) * z / fy
+        uu = (x/psp.pixmm + psp.w/2).astype(int)
+        vv = (y/psp.pixmm + psp.h/2).astype(int)
+        # check boundary of the image
+        mask_u = np.logical_and(uu >= 0, uu < psp.w)
+        mask_v = np.logical_and(vv >= 0, vv < psp.h)
+        # check the depth
+        z = z.max() - z
+        mask_z = z > psp.min_depth
+        mask_map = mask_u & mask_v & mask_z
+        heightMap = np.zeros((psp.h,psp.w))
+        uu = uu[mask_map]
+        vv = vv[mask_map]
+        z = z[mask_map]
+        heightMap[vv,uu] = z
+        raw_height_map = heightMap.copy()
+        heightMap /= psp.pixmm
 
         max_g = np.max(gel_map)
         # min_g = np.min(gel_map)
+        max_o = np.max(heightMap)
         # pressing depth in pixel
-        pressing_height_pix = pressing_height_mm/psp.pixmm
-        # gel_map_org = copy.deepcopy(gel_map)
+        pressing_height_pix = pressing_height_mm / psp.pixmm
 
         # shift the gelpad to interact with the object
-        # max_o = np.max(heightMap_pixel)
-        gel_map = -1 * gel_map + (max_g + max_o - pressing_height_pix)
+        gel_map = -1 * gel_map + (max_g+max_o-pressing_height_pix)
+        empty_value = gel_map.mean()
         # get the contact area
-        contact_mask = gel_map<heightMap_pixel
-        # contact_mask = contact_mask & (~inf_mask)
-        # heightMap = gel_map_org + heightMap - pressing_height_pix
-
+        contact_mask = heightMap > gel_map
+        contact_mask = np.array(255*contact_mask, dtype=np.uint8)
+        morphclose_kernel=cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
+        refined_contact_mask = cv2.morphologyEx(contact_mask, cv2.MORPH_CLOSE, morphclose_kernel, iterations=1)
+        addon_mask = np.logical_and(refined_contact_mask, ~contact_mask)
+        addon_v, addon_u = np.nonzero(addon_mask)
+        addon_height = griddata(np.stack((uu,vv),axis=1), z /psp.pixmm, np.stack((addon_u, addon_v), axis=1), fill_value=empty_value)
+        heightMap[addon_mask] = addon_height
         # combine contact area of object shape with non contact area of gelpad shape
-        zq = np.zeros((psp.h,psp.w))
-
-        zq[contact_mask] = heightMap_pixel[contact_mask]
+        zq = np.zeros((psp.h, psp.w))
+        contact_mask = refined_contact_mask > 0
+        zq[contact_mask]  = heightMap[contact_mask]
         zq[~contact_mask] = gel_map[~contact_mask]
-        raw_heightmap[~contact_mask] = np.inf
         if args.debug:
             plt.cla()
             plt.imshow(contact_mask)
@@ -294,11 +313,14 @@ class simulator(object):
             plt.cla()
             plt.imshow(zq)
             plt.savefig("debug_zq.png")
-        if args.debug:
             plt.cla()
-            plt.imshow(raw_heightmap)
-            plt.savefig("debug_heightmap.png")
-        return zq, gel_map, contact_mask, raw_heightmap
+            plt.imshow(heightMap)
+            plt.savefig('debug_heightmap.png')
+            plt.cla()
+            plt.imshow(t_hit_map)
+            plt.savefig('debug_t_hit_map.png')
+
+        return zq, gel_map, contact_mask, raw_height_map
 
     def deformApprox(self, pressing_height_mm, height_map, gel_map, contact_mask):
         zq = height_map.copy()
@@ -334,7 +356,7 @@ class simulator(object):
 
         GD1 = interpolate.griddata((x1, y1), newarr.ravel(),
                                   (xx, yy),
-                                     method='linear', fill_value = 0) # cubic # nearest # linear
+                                     method='cubic', fill_value = 0) # cubic # nearest # linear
         return GD1
 
     def generate_normals(self,height_map):
@@ -367,13 +389,12 @@ class simulator(object):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--mesh_folder", default="objs/6d/apple.ply")
-    parser.add_argument("--calib_dir", default="calibs")
+    parser.add_argument("--calib_dir", default="calibs/gelsight_r5")
     parser.add_argument("--gelmap",type=str,default="calibs/zero.npy")
     parser.add_argument("--pose_dir",type=str,default="data/apple/pose")
     parser.add_argument("--output_dir",type=str,default="data/apple")
     parser.add_argument('--raycast_file', type=str, default="raycast_para/apple.json")
-    parser.add_argument("--debug",type=bool,default=False)
-    parser.add_argument("--dim",type=int,default=6,choices=[3,6])
+    parser.add_argument("--debug",type=bool,default=True)
     args = parser.parse_args()
     raycast_data = json.load(open(args.raycast_file,'r'))
     press_depth = raycast_data['depth']
@@ -390,19 +411,13 @@ if __name__ == "__main__":
     t_img_dir = os.path.join(args.output_dir,'t_img')
     height_dir = os.path.join(args.output_dir, 'height')
     pose = np.loadtxt(os.path.join(args.pose_dir, pose_files[0]))
-    if args.dim == 3:
-        init_tsl = pose[:2]  # initial position
-    elif args.dim == 6:
-        init_tsl = pose[:3]
-    else:
-        raise NotImplementedError()
+    init_tsl = pose[:2]  # initial position
     os.makedirs(t_mask_dir,exist_ok=True)
     os.makedirs(t_img_dir,exist_ok=True)
     os.makedirs(height_dir, exist_ok=True)
     for index, pose_file in tqdm(enumerate(pose_files),total=len(pose_files)):
         pose = np.loadtxt(os.path.join(args.pose_dir, pose_file))
-        assert len(pose) == args.dim
-        if args.dim == 3:  # 3 pose mod (x,y,theta)
+        if len(pose) == 3:  # 3 pose mod (x,y,theta)
             tsl_plsholder = np.array(transfer_data['translation']['scale']) != 0
             rot_plsholder = np.array(transfer_data['rotation']['scale']) != 0
             dx, dy, dtheta = pose
@@ -416,12 +431,10 @@ if __name__ == "__main__":
             rot_euler *= np.array(transfer_data['rotation']['scale'])
             rot_euler += np.array(transfer_data['rotation']['bias'])
             rot_mat = Rotation.from_euler(transfer_data['rotation']['mode'], rot_euler, False).as_matrix()
-        elif args.dim == 6:  # 6 pose mod (x,y,z,rx,ry,rz)
+        elif len(pose) == 6:  # 6 pose mod (x,y,z,rx,ry,rz)
             tsl = np.array(pose[:3])
-            tsl -= init_tsl
             rot_euler = np.array(pose[3:])
             rot_mat = Rotation.from_euler('xyz', rot_euler, False).as_matrix()
-        
         # generate height map
         height_map, gel_map, contact_mask, real_height_map = sim.generateHeightMap(gelpad_model_path, press_depth, tsl, rot_mat, raycast_data['ray_casting'])
         np.save(osp.join(height_dir, "%04d.npy"%index), real_height_map)

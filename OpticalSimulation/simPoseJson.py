@@ -25,6 +25,22 @@ def rot_transfer(dx, dy, dtheata):
     rot_zyx = [dtheata,0,0]
     return translation, rot_zyx
 
+
+def load_pose(data:dict, name:str):
+    obj_pose = np.eye(4)
+    obj_pose[:3,:3] = data[name]['rotation']
+    obj_pose[:3,3] = data[name]['location']
+    return obj_pose
+
+def inv_pose(pose:np.ndarray, inplace=False):
+    if inplace:
+        new_pose = pose
+    else:
+        new_pose = pose.copy()
+    new_pose[:3,:3] = pose[:3,:3].T
+    new_pose[:3,3] = -new_pose[:3,:3] @ new_pose[:3,3]
+    return new_pose
+
 class simulator(object):
     def __init__(self, data_folder:str, mesh_path:str, mesh_scale:float, zero_mean:bool=True, origin=[0,0,0]):
         """
@@ -41,7 +57,7 @@ class simulator(object):
             center = self.mesh.get_center()
             self.mesh.translate(-center)
         self.mesh.scale(mesh_scale,[0,0,0])
-        self.mesh.translate(-np.asanyarray(origin))
+        self.mesh.translate(np.asanyarray(origin))
         # polytable
         calib_data = osp.join(data_folder, "polycalib.npz")
         self.calib_data = CalibData(calib_data)
@@ -218,7 +234,7 @@ class simulator(object):
         shadow_sim_img = cv2.GaussianBlur(shadow_sim_img.astype(np.float32),(pr.kernel_size,pr.kernel_size),0)
         return sim_img, shadow_sim_img
 
-    def generateHeightMap(self, gelpad_model_path:str, pressing_height_mm:float, tsl:np.ndarray, rot:np.ndarray, raycast_argv:dict):
+    def generateHeightMap(self, gelpad_model_path:str, pressing_height_mm:float, rel_pose:np.ndarray, raycast_argv:dict):
         """
         Generate the height map by interacting the object with the gelpad model.
         pressing_height_mm: pressing depth in millimeter
@@ -234,9 +250,9 @@ class simulator(object):
         gel_map = cv2.GaussianBlur(gel_map.astype(np.float32),(pr.kernel_size,pr.kernel_size),0)
         # heightMap = np.zeros((psp.h,psp.w))
         tf_mesh = deepcopy(self.mesh)
-        tf_mesh.rotate(rot,
+        tf_mesh.rotate(rel_pose[:3,:3],
                     center=[0,0,0])
-        tf_mesh.translate(tsl)
+        tf_mesh.translate(rel_pose[:3,3])
         
         
         mesh = o3d.t.geometry.TriangleMesh.from_legacy(tf_mesh)
@@ -249,11 +265,13 @@ class simulator(object):
         )
         ans = scene.cast_rays(rays)
         heightMap = ans['t_hit'].numpy()
-        raw_heightmap = heightMap.copy()
+        if args.debug:
+            plt.imshow(heightMap)
+            plt.savefig("debug_heightmap.png")
+
         inf_mask = np.isinf(heightMap)
         heightMap[inf_mask] = 0
         heightMap_pixel = 1000*heightMap/psp.pixmm
-        # heightMap_pixel = 1000*heightMap/psp.pixmm
         min_o = np.min(heightMap_pixel[np.nonzero(heightMap_pixel)])
 
         heightMap_pixel = -heightMap_pixel+0.015/psp.pixmm+min_o
@@ -268,10 +286,10 @@ class simulator(object):
         # heightMap[vv[mask_map],uu[mask_map]] = self.vertices[mask_map][:,2]/psp.pixmm
 
         max_g = np.max(gel_map)
-        # min_g = np.min(gel_map)
+        min_g = np.min(gel_map)
         # pressing depth in pixel
         pressing_height_pix = pressing_height_mm/psp.pixmm
-        # gel_map_org = copy.deepcopy(gel_map)
+        gel_map_org = copy.deepcopy(gel_map)
 
         # shift the gelpad to interact with the object
         # max_o = np.max(heightMap_pixel)
@@ -286,19 +304,13 @@ class simulator(object):
 
         zq[contact_mask] = heightMap_pixel[contact_mask]
         zq[~contact_mask] = gel_map[~contact_mask]
-        raw_heightmap[~contact_mask] = np.inf
         if args.debug:
-            plt.cla()
             plt.imshow(contact_mask)
             plt.savefig("debug_mask.png")
-            plt.cla()
             plt.imshow(zq)
             plt.savefig("debug_zq.png")
-        if args.debug:
-            plt.cla()
-            plt.imshow(raw_heightmap)
-            plt.savefig("debug_heightmap.png")
-        return zq, gel_map, contact_mask, raw_heightmap
+
+        return zq, gel_map, contact_mask
 
     def deformApprox(self, pressing_height_mm, height_map, gel_map, contact_mask):
         zq = height_map.copy()
@@ -366,14 +378,14 @@ class simulator(object):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mesh_folder", default="objs/6d/apple.ply")
+    parser.add_argument("--mesh_folder", default="objects/jar.stl")
+    parser.add_argument("--obj_name",type=str,default='jar')
     parser.add_argument("--calib_dir", default="calibs")
-    parser.add_argument("--gelmap",type=str,default="calibs/zero.npy")
-    parser.add_argument("--pose_dir",type=str,default="data/apple/pose")
-    parser.add_argument("--output_dir",type=str,default="data/apple")
-    parser.add_argument('--raycast_file', type=str, default="raycast_para/apple.json")
-    parser.add_argument("--debug",type=bool,default=False)
-    parser.add_argument("--dim",type=int,default=6,choices=[3,6])
+    parser.add_argument("--gelmap",type=str,default="calibs/gelmap5.npy")
+    parser.add_argument("--pose_dir",type=str,default="data/jar/pose")
+    parser.add_argument("--output_dir",type=str,default="data/jar/")
+    parser.add_argument('--raycast_file', type=str, default="raycast_para2/jar.json")
+    parser.add_argument("--debug",type=bool,default=True)
     args = parser.parse_args()
     raycast_data = json.load(open(args.raycast_file,'r'))
     press_depth = raycast_data['depth']
@@ -381,50 +393,19 @@ if __name__ == "__main__":
     # gelpad_model_path = osp.join( '..', 'calibs', 'dome_gel.npy')
     gelpad_model_path = args.gelmap
     sim = simulator(args.calib_dir, args.mesh_folder, transfer_data['scale'], transfer_data['zero_mean'], transfer_data['origin'])
-
-    raw_tsl = np.zeros(3)
-    raw_rot_euler = np.zeros(3)
-    
     pose_files = sorted(os.listdir(args.pose_dir))
     t_mask_dir = os.path.join(args.output_dir,'t_mask')
     t_img_dir = os.path.join(args.output_dir,'t_img')
-    height_dir = os.path.join(args.output_dir, 'height')
-    pose = np.loadtxt(os.path.join(args.pose_dir, pose_files[0]))
-    if args.dim == 3:
-        init_tsl = pose[:2]  # initial position
-    elif args.dim == 6:
-        init_tsl = pose[:3]
-    else:
-        raise NotImplementedError()
     os.makedirs(t_mask_dir,exist_ok=True)
     os.makedirs(t_img_dir,exist_ok=True)
-    os.makedirs(height_dir, exist_ok=True)
     for index, pose_file in tqdm(enumerate(pose_files),total=len(pose_files)):
-        pose = np.loadtxt(os.path.join(args.pose_dir, pose_file))
-        assert len(pose) == args.dim
-        if args.dim == 3:  # 3 pose mod (x,y,theta)
-            tsl_plsholder = np.array(transfer_data['translation']['scale']) != 0
-            rot_plsholder = np.array(transfer_data['rotation']['scale']) != 0
-            dx, dy, dtheta = pose
-            tsl = np.copy(raw_tsl)
-            tsl[tsl_plsholder] = np.array([dx, dy]) - init_tsl
-            tsl *= np.array(transfer_data['translation']['scale'])
-            tsl += np.array(transfer_data['translation']['bias'])
-            rot_euler = np.copy(raw_rot_euler)
-            # dtheta = 0
-            rot_euler[rot_plsholder] = dtheta
-            rot_euler *= np.array(transfer_data['rotation']['scale'])
-            rot_euler += np.array(transfer_data['rotation']['bias'])
-            rot_mat = Rotation.from_euler(transfer_data['rotation']['mode'], rot_euler, False).as_matrix()
-        elif args.dim == 6:  # 6 pose mod (x,y,z,rx,ry,rz)
-            tsl = np.array(pose[:3])
-            tsl -= init_tsl
-            rot_euler = np.array(pose[3:])
-            rot_mat = Rotation.from_euler('xyz', rot_euler, False).as_matrix()
-        
+        pose = json.load(open(os.path.join(args.pose_dir, pose_file),'r'))
+        obj_pose = load_pose(pose, args.obj_name)
+        tac_left_pose = load_pose(pose, 'Fingertip.L')
+        obj_pose[:3,:3] = np.eye(3)
+        obj_rel_pose = inv_pose(tac_left_pose) @ obj_pose
         # generate height map
-        height_map, gel_map, contact_mask, real_height_map = sim.generateHeightMap(gelpad_model_path, press_depth, tsl, rot_mat, raycast_data['ray_casting'])
-        np.save(osp.join(height_dir, "%04d.npy"%index), real_height_map)
+        height_map, gel_map, contact_mask = sim.generateHeightMap(gelpad_model_path, press_depth, obj_pose, raycast_data['ray_casting'])
         # approximate the soft deformation
         # contact_height = height_map - gel_map
         heightMap, contact_mask, contact_height = sim.deformApprox(press_depth, height_map, gel_map, contact_mask)
