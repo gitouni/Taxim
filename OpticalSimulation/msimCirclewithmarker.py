@@ -152,7 +152,7 @@ class simulator(object):
         dzdy = grad_mag * np.sin(grad_dir)
         # generate raw simulated image without background
         sim_img_r = np.zeros((psp.h,psp.w,3))
-        bins = psp.numBins
+        bins = self.calib_data.grad_r.shape[0]
 
         [xx, yy] = np.meshgrid(range(psp.w), range(psp.h))
         xf = xx.flatten()
