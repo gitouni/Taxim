@@ -36,8 +36,6 @@ def options():
     obj_parser.add_argument("--max_margin_ratio",type=float,default=0.6)
     obj_parser.add_argument("--sample_num",type=int,default=80)
     obj_parser.add_argument("--seed",type=int,default=1124)
-    obj_parser.add_argument("--suffix",type=str,default=".pcd")
-    obj_parser.add_argument("--zero_mean",type=bool,default=False)
     marker_parser = parser.add_argument_group()
     marker_parser.add_argument("--marker_init_pos", type=int, nargs=2, default=[0,0])
     marker_parser.add_argument("--marker_rows",type=int, default=8, help="number of intervals")
