@@ -69,5 +69,13 @@ If you use Taxim in your research, please cite:
   year={2021}
 }
 ```
-
+# Marker Simulation
+```bash
+python OpticalSimulation/msimCirclewithmarker.py
+```
+|Makrer|Markerless|Markered|
+|---|---|---|
+|![](./doc/marker/0000.bmp)|![](./doc/markerless/0000.jpg)|![](./doc/markered/0000.jpg)|
+|![](./doc/marker/0001.bmp)|![](./doc/markerless/0001.jpg)|![](./doc/markered/0001.jpg)|
+|![](./doc/marker/0002.bmp)|![](./doc/markerless/0002.jpg)|![](./doc/markered/0002.jpg)|
 
